@@ -3,6 +3,7 @@ use crate::human::HumanDriver;
 use serde::Deserialize;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering}; // 引入原子操作支持
 use std::thread;
 use std::time::{Duration, Instant};
 use std::fs;
@@ -26,7 +27,7 @@ pub enum NavResult {
 }
 
 // ==========================================
-// 1. TOML 配置
+// 1. TOML 配置数据结构
 // ==========================================
 #[derive(Deserialize, Debug, Clone)]
 struct TomlRoot { scenes: Vec<Scene> }
@@ -69,12 +70,14 @@ struct Transition {
 fn default_delay() -> u64 { 500 }
 
 // ==========================================
-// 2. 接口层 (OCR 能力)
+// 2. 接口层 (OCR 与 多重图像预处理)
 // ==========================================
 struct GameInterface {
     driver: Arc<Mutex<HumanDriver>>,
     ocr_engine: Option<OcrEngine>,
+    screenshot_count: AtomicUsize, 
 }
+
 unsafe impl Send for GameInterface {}
 unsafe impl Sync for GameInterface {}
 
@@ -88,9 +91,14 @@ impl GameInterface {
             },
             Err(_) => OcrEngine::TryCreateFromUserProfileLanguages().ok(),
         };
-        Self { driver, ocr_engine: engine }
+        Self { 
+            driver, 
+            ocr_engine: engine,
+            screenshot_count: AtomicUsize::new(0), 
+        }
     }
 
+    /// 调用底层 Windows OCR 识别单张图像
     fn run_windows_ocr(&self, dynamic_img: image::DynamicImage) -> String {
         if self.ocr_engine.is_none() { return String::new(); }
         let engine = self.ocr_engine.as_ref().unwrap();
@@ -130,35 +138,51 @@ impl GameInterface {
     }
 
     pub fn get_text_from_area(&self, rect: [i32; 4]) -> String {
-         let x = rect[0]; let y = rect[1];
+         let x = rect[0]; 
+         let y = rect[1];
          let w = (rect[2] - rect[0]).max(1);
          let h = (rect[3] - rect[1]).max(1);
          
          let screens = Screen::all().unwrap_or_default();
          let screen = match screens.first() { Some(s) => s, None => return String::new() };
          
-         let image = match screen.capture_area(x, y, w as u32, h as u32) {
+         let captured_data = match screen.capture_area(x, y, w as u32, h as u32) {
              Ok(img) => img,
              Err(_) => return String::new(),
          };
 
-         let width = image.width();
-         let height = image.height();
-         let raw_pixels = image.into_raw();
-         
-         if raw_pixels.is_empty() { return String::new(); }
+         // 1. 基础转换
+         let rgba_img = image::RgbaImage::from_raw(captured_data.width(), captured_data.height(), captured_data.into_raw()).unwrap();
+         let dynamic_img = image::DynamicImage::ImageRgba8(rgba_img);
 
-         let new_img = match image::RgbaImage::from_raw(width, height, raw_pixels) {
-             Some(img) => img,
-             None => return String::new(),
-         };
+         // 2. 🔥 2倍放大：Lanczos3 采样能有效平滑艺术字边缘
+         let scaled_img = dynamic_img.resize(w as u32 * 2, h as u32 * 2, image::imageops::FilterType::Lanczos3);
          
-         // 🔥 [新增] 每次识别时保存截图，方便观察识别区域是否正确
-         if let Err(e) = new_img.save("debug_capture.png") {
-             eprintln!("⚠️ 无法保存调试截图: {}", e);
-         }
+         // 3. 🔥 多重曝光 OCR 策略
+         let mut results = Vec::new();
 
-         self.run_windows_ocr(image::DynamicImage::ImageRgba8(new_img))
+         // 策略 A: 强二值化 (阈值 200) - 专门剥离 image_2dd778 中的背景斜线
+         let mut luma_high = scaled_img.grayscale().into_luma8();
+         for pixel in luma_high.pixels_mut() { pixel[0] = if pixel[0] > 200 { 255 } else { 0 }; }
+         results.push(self.run_windows_ocr(image::DynamicImage::ImageLuma8(luma_high)));
+
+         // 策略 B: 中等二值化 (阈值 140) - 针对 image_2e577c 这种较暗的场景
+         let mut luma_mid = scaled_img.grayscale().into_luma8();
+         for pixel in luma_mid.pixels_mut() { pixel[0] = if pixel[0] > 140 { 255 } else { 0 }; }
+         results.push(self.run_windows_ocr(image::DynamicImage::ImageLuma8(luma_mid)));
+
+         // 策略 C: 原色缩放图 - 作为低对比度场景 (image_393c9e) 的兜底
+         results.push(self.run_windows_ocr(scaled_img.clone()));
+
+         // 4. 合并所有识别到的文本块
+         let final_text = results.join(" ");
+
+         /* // 📸 调试用：如需观察处理后的图像，取消下面代码注释
+         let count = self.screenshot_count.fetch_add(1, Ordering::SeqCst);
+         scaled_img.save(format!("debug_scaled_{}.png", count)).ok();
+         */
+
+         final_text
     }
 
     fn check_text_anchor(&self, rect: [i32; 4], expected: &str) -> bool {
@@ -169,7 +193,6 @@ impl GameInterface {
     pub fn debug_ocr_file(&self, file_path: &str, expected_contain: &str) {
         println!("📂 [本地测试] 加载: {}", file_path);
         if !Path::new(file_path).exists() { return; }
-
         let dynamic_img = image::open(file_path).expect("加载失败");
         let output = self.run_windows_ocr(dynamic_img);
         println!("📝 结果: [{}] | 期望: [{}] -> {}", output, expected_contain, output.contains(expected_contain));
@@ -188,10 +211,9 @@ impl GameInterface {
         diff <= (tolerance as i16 * 3)
     }
 
-fn perform_click(&self, x: i32, y: i32) {
+    fn perform_click(&self, x: i32, y: i32) {
         if let Ok(mut bot) = self.driver.lock() {
             bot.move_to_humanly(x as u16, y as u16, 0.6);
-            // 🔥 增加第三个参数 0，表示使用默认随机点击时长
             bot.click_humanly(true, false, 0); 
         }
     }
@@ -225,33 +247,25 @@ impl NavEngine {
     fn get_match_score(&self, target_id: &str) -> usize {
         if let Some(scene) = self.scenes.get(target_id) {
             if scene.anchors.is_none() { return 0; }
-            
             let anchors = scene.anchors.as_ref().unwrap();
             let mut score = 0;
             let mut total_checks = 0;
-
             if let Some(texts) = &anchors.text {
                 for t in texts {
                     total_checks += 1;
-                    if self.interface.check_text_anchor(t.rect, &t.val) {
-                        score += 1;
-                    }
+                    if self.interface.check_text_anchor(t.rect, &t.val) { score += 1; }
                 }
             }
             if let Some(colors) = &anchors.color {
                 for c in colors {
                     total_checks += 1;
-                    if self.interface.check_color_anchor(c.pos, &c.val, c.tol) {
-                        score += 1;
-                    }
+                    if self.interface.check_color_anchor(c.pos, &c.val, c.tol) { score += 1; }
                 }
             }
-
             let passed = match scene.logic.to_lowercase().as_str() {
                 "or" => score > 0,              
                 _ => score == total_checks && total_checks > 0, 
             };
-
             if passed { return score; }
         }
         0
@@ -259,33 +273,23 @@ impl NavEngine {
 
     pub fn identify_current_scene(&self, hint: Option<&str>) -> Option<String> {
         println!("👀 扫描当前界面...");
-
         if let Some(target_id) = hint {
             if self.get_match_score(target_id) > 0 {
                 println!("✅ 命中预期目标: [{}]", target_id);
                 return Some(target_id.to_string());
             }
         }
-
         let mut best_match: Option<String> = None;
         let mut max_score = 0;
-
         for (id, _) in &self.scenes {
             if let Some(h) = hint { if h == id { continue; } }
-
             let score = self.get_match_score(id);
-            if score > 0 {
-                if score > max_score {
-                    max_score = score;
-                    best_match = Some(id.clone());
-                }
+            if score > 0 && score > max_score {
+                max_score = score;
+                best_match = Some(id.clone());
             }
         }
-
-        if let Some(id) = &best_match {
-            println!("✅ 定位: [{}] (得分: {})", id, max_score);
-        }
-        
+        if let Some(id) = &best_match { println!("✅ 定位: [{}] (得分: {})", id, max_score); }
         best_match
     }
 
@@ -308,43 +312,33 @@ impl NavEngine {
             Some(id) => id,
             None => { println!("❌ 无法定位起点"); return NavResult::Failed; }
         };
-
         if start_id == target_id {
             println!("✅ 已在目标位置");
             return NavResult::Success;
         }
-
         println!("🤖 规划路径: [{}] -> [{}]", start_id, target_id);
         let path = match self.find_path(&start_id, target_id) {
             Some(p) => p,
             None => { println!("❌ 无路可走"); return NavResult::Failed; }
         };
-
         for (i, step) in path.iter().enumerate() {
             println!("\n➡️  [步骤 {}/{}] 点击 -> [{}]", i+1, path.len(), step.target);
             self.interface.perform_click(step.coords[0], step.coords[1]);
-
             let is_virtual = if let Some(s) = self.scenes.get(&step.target) {
                 s.anchors.is_none()
             } else { false };
-
             if is_virtual {
                 println!("🚀 游戏入口，移交控制权！");
                 thread::sleep(Duration::from_millis(step.post_delay));
                 return NavResult::Handover(step.target.clone());
             }
-
             let timeout = if step.post_delay < 2000 { 2000 } else { step.post_delay };
             if !self.wait_for_scene(&step.target, timeout) {
                 println!("❌ 导航中断: 未能进入 [{}]", step.target);
-                if let Some(real_pos) = self.identify_current_scene(None) {
-                    println!("   (当前实际位于: [{}])", real_pos);
-                }
                 return NavResult::Failed;
             }
             thread::sleep(Duration::from_millis(300));
         }
-
         println!("✅ 导航完成");
         NavResult::Success
     }
@@ -354,7 +348,6 @@ impl NavEngine {
         let mut queue = VecDeque::from([start.to_string()]);
         let mut came_from: HashMap<String, (String, Transition)> = HashMap::new();
         let mut visited = vec![start.to_string()];
-
         while let Some(curr) = queue.pop_front() {
             if curr == target {
                 let mut path = vec![];

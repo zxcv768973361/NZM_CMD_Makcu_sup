@@ -6,7 +6,6 @@ logic = "and"
 [scenes.anchors]
 text = [
   { rect = [1580, 882, 1762, 958], val = "选择玩法" },
-  { rect = [1787, 1024, 1851, 1067], val = "菜单" },
 ]
 color = [
 ]
@@ -46,7 +45,6 @@ logic = "and"
 [scenes.anchors]
 text = [
   { rect = [107, 756, 241, 808], val = "僵尸猎场" },
-  { rect = [1783, 1030, 1847, 1071], val = "关闭" },
 ]
 color = [
 ]
@@ -91,7 +89,6 @@ logic = "and"
 [scenes.anchors]
 text = [
   { rect = [145, 60, 210, 103], val = "地图" },
-  { rect = [83, 512, 239, 564], val = "空间站" },
 ]
 color = [
 ]
