@@ -14,15 +14,27 @@ use std::time::{Duration, Instant};
 #[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "type")] // JSON 中使用 "type": "Click" 来区分
 pub enum InitAction {
-    Move { x: u16, y: u16 },
-    Click { 
-        #[serde(default)] left: bool, 
-        #[serde(default)] right: bool,
-        #[serde(default)] hold_ms: u64 
+    Move {
+        x: u16,
+        y: u16,
     },
-    Key { char: char },
-    Wait { ms: u64 },
-    Log { msg: String },
+    Click {
+        #[serde(default)]
+        left: bool,
+        #[serde(default)]
+        right: bool,
+        #[serde(default)]
+        hold_ms: u64,
+    },
+    Key {
+        char: char,
+    },
+    Wait {
+        ms: u64,
+    },
+    Log {
+        msg: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -38,7 +50,7 @@ impl Default for TDConfig {
     fn default() -> Self {
         Self {
             hud_check_rect: [262, 16, 389, 97],
-            hud_wave_loop_rect: [350, 288, 582, 362], 
+            hud_wave_loop_rect: [350, 288, 582, 362],
             safe_zone: [200, 200, 1720, 880],
             screen_width: 1920.0,
             screen_height: 1080.0,
@@ -58,7 +70,7 @@ pub struct MapMeta {
     pub grid_pixel_size: f32,
     pub offset_x: f32,
     pub offset_y: f32,
-    pub bottom: f32, 
+    pub bottom: f32,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -158,9 +170,9 @@ pub struct TowerDefenseApp {
 
     trap_lookup: HashMap<String, TrapConfigItem>,
     active_loadout: Vec<String>,
-    
-    camera_offset_y: f32, 
-    move_speed: f32, 
+
+    camera_offset_y: f32,
+    move_speed: f32,
 }
 
 impl TowerDefenseApp {
@@ -181,7 +193,7 @@ impl TowerDefenseApp {
             trap_lookup: HashMap::new(),
             active_loadout: Vec::new(),
             camera_offset_y: 0.0,
-            move_speed: 720.0, 
+            move_speed: 720.0,
         }
     }
 
@@ -191,8 +203,12 @@ impl TowerDefenseApp {
                 self.strategy_buildings = data.buildings;
                 self.strategy_upgrades = data.upgrades;
                 self.strategy_demolishes = data.demolishes;
-                println!("🏗️ 策略加载成功: 建{} | 升{} | 拆{}",
-                    self.strategy_buildings.len(), self.strategy_upgrades.len(), self.strategy_demolishes.len());
+                println!(
+                    "🏗️ 策略加载成功: 建{} | 升{} | 拆{}",
+                    self.strategy_buildings.len(),
+                    self.strategy_upgrades.len(),
+                    self.strategy_demolishes.len()
+                );
             } else {
                 println!("❌ 策略 JSON 解析失败");
             }
@@ -200,10 +216,12 @@ impl TowerDefenseApp {
     }
 
     pub fn recognize_wave_status(&self, rect: [i32; 4], use_tab: bool) -> Option<WaveStatus> {
-        const KEY_TAB: u8 = 0x2B; 
+        const KEY_TAB: u8 = 0x2B;
         if use_tab {
             if let Ok(driver) = self.driver.lock() {
-                if let Ok(mut dev) = driver.device.lock() { dev.key_down(KEY_TAB, 0); }
+                if let Ok(mut dev) = driver.device.lock() {
+                    dev.key_down(KEY_TAB, 0);
+                }
             }
             thread::sleep(Duration::from_millis(500));
         }
@@ -212,26 +230,51 @@ impl TowerDefenseApp {
 
         if use_tab {
             if let Ok(driver) = self.driver.lock() {
-                if let Ok(mut dev) = driver.device.lock() { dev.key_up(); }
+                if let Ok(mut dev) = driver.device.lock() {
+                    dev.key_up();
+                }
             }
             thread::sleep(Duration::from_millis(500));
             if let Ok(driver) = self.driver.lock() {
-                if let Ok(mut dev) = driver.device.lock() { dev.key_down(KEY_TAB, 0); }
+                if let Ok(mut dev) = driver.device.lock() {
+                    dev.key_down(KEY_TAB, 0);
+                }
             }
             thread::sleep(Duration::from_millis(100));
             if let Ok(driver) = self.driver.lock() {
-                if let Ok(mut dev) = driver.device.lock() { dev.key_up(); }
+                if let Ok(mut dev) = driver.device.lock() {
+                    dev.key_up();
+                }
             }
         }
 
-        if text.is_empty() { return None; }
+        if text.is_empty() {
+            return None;
+        }
 
-        let val = if use_tab {
-            let re = Regex::new(r"(\d+)/\d+.*波次").ok()?;
-            re.captures(&text)?.get(1)?.as_str().parse::<i32>().ok()?
+// 🔥 新增：打印原始 OCR 文本（带上范围标记，防止有不可见字符）
+        println!("🔍 [OCR Debug] 原始文本: 「{}」 (Mode: {})", text.trim(), if use_tab { "TAB" } else { "HUD" });
+
+let val = if use_tab {
+            // 🔥 更加鲁棒的 TAB 模式正则：
+            // 1. (\d+) : 捕获当前的波次数字
+            // 2. [/\dSI日]+ : 匹配斜杠及其后面的干扰字符（数字、S、I、日、/ 等）
+            // 3. .*波次 : 匹配后面的“波次”文字
+            let re = Regex::new(r"(\d+)[/\dSI日]+.*波次").ok()?;
+            
+            re.captures(&text).and_then(|caps| {
+                let num = caps.get(1)?.as_str().parse::<i32>().ok()?;
+                println!("✅ [OCR Match] TAB 模式匹配成功: 第 {} 波", num);
+                Some(num)
+            })?
         } else {
-            let re = Regex::new(r"波次(\d+)").ok()?;
-            re.captures(&text)?.get(1)?.as_str().parse::<i32>().ok()?
+            // HUD 模式保持相对严格
+            let re = Regex::new(r"波次\s*(\d+)").ok()?;
+            re.captures(&text).and_then(|caps| {
+                let num = caps.get(1)?.as_str().parse::<i32>().ok()?;
+                println!("✅ [OCR Match] HUD 模式匹配成功: 第 {} 波", num);
+                Some(num)
+            })?
         };
         Some(WaveStatus { current_wave: val })
     }
@@ -242,11 +285,16 @@ impl TowerDefenseApp {
         let is_next_wave = detected_wave == self.last_confirmed_wave + 1;
         let is_long_enough = elapsed >= 60 || self.last_confirmed_wave == 0;
         if is_next_wave && is_long_enough {
-            println!("✅ [Monitor] 新波次: {} -> {}", self.last_confirmed_wave, detected_wave);
+            println!(
+                "✅ [Monitor] 新波次: {} -> {}",
+                self.last_confirmed_wave, detected_wave
+            );
             self.last_confirmed_wave = detected_wave;
             self.last_wave_change_time = now;
             true
-        } else { false }
+        } else {
+            false
+        }
     }
 
     pub fn execute_wave_phase(&mut self, wave: i32, is_late: bool) {
@@ -255,47 +303,89 @@ impl TowerDefenseApp {
 
         let mut tasks: Vec<ScheduledTask> = Vec::new();
 
-        for d in self.strategy_demolishes.iter().filter(|d| d.wave_num == wave && d.is_late == is_late && !self.completed_demolish_uids.contains(&d.uid)) {
-            if let Some((px, py)) = self.get_absolute_map_pixel(d.grid_x, d.grid_y, d.width, d.height) {
-                tasks.push(ScheduledTask { action: TaskAction::Demolish(d.clone()), map_y: py, map_x: px, priority: 0 });
+        for d in self.strategy_demolishes.iter().filter(|d| {
+            d.wave_num == wave
+                && d.is_late == is_late
+                && !self.completed_demolish_uids.contains(&d.uid)
+        }) {
+            if let Some((px, py)) =
+                self.get_absolute_map_pixel(d.grid_x, d.grid_y, d.width, d.height)
+            {
+                tasks.push(ScheduledTask {
+                    action: TaskAction::Demolish(d.clone()),
+                    map_y: py,
+                    map_x: px,
+                    priority: 0,
+                });
             }
         }
-        for b in self.strategy_buildings.iter().filter(|b| b.wave_num == wave && b.is_late == is_late && !self.placed_uids.contains(&b.uid)) {
-            if let Some((px, py)) = self.get_absolute_map_pixel(b.grid_x, b.grid_y, b.width, b.height) {
-                tasks.push(ScheduledTask { action: TaskAction::Place(b.clone()), map_y: py, map_x: px, priority: 1 });
+        for b in self.strategy_buildings.iter().filter(|b| {
+            b.wave_num == wave && b.is_late == is_late && !self.placed_uids.contains(&b.uid)
+        }) {
+            if let Some((px, py)) =
+                self.get_absolute_map_pixel(b.grid_x, b.grid_y, b.width, b.height)
+            {
+                tasks.push(ScheduledTask {
+                    action: TaskAction::Place(b.clone()),
+                    map_y: py,
+                    map_x: px,
+                    priority: 1,
+                });
             }
         }
-        for u in self.strategy_upgrades.iter().filter(|u| u.wave_num == wave && u.is_late == is_late) {
+        for u in self
+            .strategy_upgrades
+            .iter()
+            .filter(|u| u.wave_num == wave && u.is_late == is_late)
+        {
             let key = format!("{}-{}-{}", u.building_name, u.wave_num, u.is_late);
             if !self.completed_upgrade_keys.contains(&key) {
-                tasks.push(ScheduledTask { action: TaskAction::Upgrade(u.clone()), map_y: 0.0, map_x: 0.0, priority: 2 });
+                tasks.push(ScheduledTask {
+                    action: TaskAction::Upgrade(u.clone()),
+                    map_y: 0.0,
+                    map_x: 0.0,
+                    priority: 2,
+                });
             }
         }
 
-        if tasks.is_empty() { return; }
+        if tasks.is_empty() {
+            return;
+        }
 
         let meta = self.map_meta.as_ref().unwrap();
         let map_h = meta.bottom;
         let screen_h = self.config.screen_height;
         let mid_point = (map_h - screen_h) / 2.0;
 
-        let (mut upper_tasks, mut lower_tasks): (Vec<_>, Vec<_>) = tasks.into_iter()
+        let (mut upper_tasks, mut lower_tasks): (Vec<_>, Vec<_>) = tasks
+            .into_iter()
             .partition(|t| t.map_y <= mid_point + screen_h / 2.0);
 
         if !upper_tasks.is_empty() {
             println!("⬆️ 执行上半区任务: {} 个", upper_tasks.len());
-            upper_tasks.sort_by(|a, b| a.map_y.partial_cmp(&b.map_y).unwrap().then(a.priority.cmp(&b.priority)));
-            
-            self.align_camera_to_edge(true); 
+            upper_tasks.sort_by(|a, b| {
+                a.map_y
+                    .partial_cmp(&b.map_y)
+                    .unwrap()
+                    .then(a.priority.cmp(&b.priority))
+            });
+
+            self.align_camera_to_edge(true);
             // 🔥 这里传入 true，表示因为刚刚对齐过，即使第一个任务就在当前位置，也要强制“三连击”刷新陷阱
             self.process_task_batch(upper_tasks, true);
         }
 
         if !lower_tasks.is_empty() {
             println!("⬇️ 执行下半区任务: {} 个", lower_tasks.len());
-            lower_tasks.sort_by(|a, b| b.map_y.partial_cmp(&a.map_y).unwrap().then(a.priority.cmp(&b.priority)));
-            
-            self.align_camera_to_edge(false); 
+            lower_tasks.sort_by(|a, b| {
+                b.map_y
+                    .partial_cmp(&a.map_y)
+                    .unwrap()
+                    .then(a.priority.cmp(&b.priority))
+            });
+
+            self.align_camera_to_edge(false);
             // 🔥 同理，传入 true
             self.process_task_batch(lower_tasks, true);
         }
@@ -323,8 +413,17 @@ impl TowerDefenseApp {
             }
 
             match &task.action {
-                TaskAction::Demolish(d) => self.perform_demolish_action(task.map_x, task.map_y, d.uid),
-                TaskAction::Place(b) => self.perform_build_action(&mut last_build_key, screen_moved, task.map_x, task.map_y, &b.name, b.uid),
+                TaskAction::Demolish(d) => {
+                    self.perform_demolish_action(task.map_x, task.map_y, d.uid)
+                }
+                TaskAction::Place(b) => self.perform_build_action(
+                    &mut last_build_key,
+                    screen_moved,
+                    task.map_x,
+                    task.map_y,
+                    &b.name,
+                    b.uid,
+                ),
                 _ => {}
             }
         }
@@ -332,20 +431,28 @@ impl TowerDefenseApp {
 
     fn perform_demolish_action(&mut self, map_x: f32, map_y: f32, uid: usize) {
         let [sz_x1, sz_y1, sz_x2, sz_y2] = self.config.safe_zone;
-        let screen_x = (map_x - 0.0).clamp(sz_x1 as f32, sz_x2 as f32); 
+        let screen_x = (map_x - 0.0).clamp(sz_x1 as f32, sz_x2 as f32);
         let screen_y = (map_y - self.camera_offset_y).clamp(sz_y1 as f32, sz_y2 as f32);
 
         if let Ok(mut driver) = self.driver.lock() {
             driver.move_to_humanly(screen_x as u16, screen_y as u16, 0.4);
-            driver.click_humanly(true, false, 0); 
+            driver.click_humanly(true, false, 0);
             thread::sleep(Duration::from_millis(150));
-            driver.key_click('p'); 
+            driver.key_click('e');
         }
         self.completed_demolish_uids.insert(uid);
         thread::sleep(Duration::from_millis(300));
     }
 
-    fn perform_build_action(&mut self, last_key: &mut Option<char>, screen_moved: bool, map_x: f32, map_y: f32, name: &str, uid: usize) {
+    fn perform_build_action(
+        &mut self,
+        last_key: &mut Option<char>,
+        screen_moved: bool,
+        map_x: f32,
+        map_y: f32,
+        name: &str,
+        uid: usize,
+    ) {
         let [sz_x1, sz_y1, sz_x2, sz_y2] = self.config.safe_zone;
         let screen_x = (map_x - 0.0).clamp(sz_x1 as f32, sz_x2 as f32);
         let screen_y = (map_y - self.camera_offset_y).clamp(sz_y1 as f32, sz_y2 as f32);
@@ -353,7 +460,7 @@ impl TowerDefenseApp {
 
         if let Ok(mut d) = self.driver.lock() {
             d.move_to_humanly(screen_x as u16, screen_y as u16, 0.35);
-            
+
             // 🔥 策略执行：只有在屏幕动过（或刚归零过）时才进行三连击
             if screen_moved {
                 let swap_key = if key == '4' { '5' } else { '4' };
@@ -371,7 +478,7 @@ impl TowerDefenseApp {
                 thread::sleep(Duration::from_millis(150));
             }
 
-            d.double_click_humanly(true, false);
+            d.double_click_humanly(true, false, 200);
         }
         self.placed_uids.insert(uid);
         thread::sleep(Duration::from_millis(250));
@@ -381,7 +488,7 @@ impl TowerDefenseApp {
         let key = self.get_trap_key(&u.building_name);
         if let Ok(mut d) = self.driver.lock() {
             println!("   -> 长按 '{}' (800ms) 以升级: {}", key, u.building_name);
-            d.key_hold(key, 800); 
+            d.key_hold(key, 1500);
         }
         let key_str = format!("{}-{}-{}", u.building_name, u.wave_num, u.is_late);
         self.completed_upgrade_keys.insert(key_str);
@@ -395,10 +502,10 @@ impl TowerDefenseApp {
         if let Ok(mut human) = self.driver.lock() {
             let key = if top { 'w' } else { 's' };
             println!("🔄 强制归零: {}", if top { "顶部" } else { "底部" });
-            human.key_hold(key, 2500); 
+            human.key_hold(key, 2500);
         }
         self.camera_offset_y = if top { 0.0 } else { max_scroll_y };
-        thread::sleep(Duration::from_millis(500)); 
+        thread::sleep(Duration::from_millis(500));
     }
 
     // 返回 true 表示确实进行了物理移动
@@ -418,10 +525,10 @@ impl TowerDefenseApp {
 
         // 判定往哪边归零更近/更顺手
         let mid_scroll = max_scroll_y / 2.0;
-        
+
         if ideal_cam_y <= mid_scroll {
             // 归零到顶部 (0)
-            self.align_camera_to_edge(true); 
+            self.align_camera_to_edge(true);
             // 向下微调
             if ideal_cam_y > 10.0 {
                 if let Ok(mut human) = self.driver.lock() {
@@ -443,7 +550,7 @@ impl TowerDefenseApp {
         }
 
         self.camera_offset_y = ideal_cam_y;
-        thread::sleep(Duration::from_millis(200)); 
+        thread::sleep(Duration::from_millis(200));
         true
     }
 
@@ -458,7 +565,9 @@ impl TowerDefenseApp {
     pub fn load_trap_config(&mut self, json_path: &str) {
         if let Ok(c) = fs::read_to_string(json_path) {
             if let Ok(items) = serde_json::from_str::<Vec<TrapConfigItem>>(&c) {
-                for item in items { self.trap_lookup.insert(item.name.clone(), item); }
+                for item in items {
+                    self.trap_lookup.insert(item.name.clone(), item);
+                }
             }
         }
     }
@@ -469,14 +578,20 @@ impl TowerDefenseApp {
             human.key_click('o');
             thread::sleep(Duration::from_secs(2));
             for _ in 1..=7 {
-                for _ in 0..12 { human.mouse_scroll(-120); thread::sleep(Duration::from_millis(30)); }
+                for _ in 0..12 {
+                    human.mouse_scroll(-120);
+                    thread::sleep(Duration::from_millis(30));
+                }
                 thread::sleep(Duration::from_millis(300));
             }
             for _ in 1..=4 {
-                human.key_hold('w', 500); thread::sleep(Duration::from_millis(50));
-                human.key_hold('a', 500); thread::sleep(Duration::from_millis(50));
+                human.key_hold('w', 500);
+                thread::sleep(Duration::from_millis(50));
+                human.key_hold('a', 500);
+                thread::sleep(Duration::from_millis(50));
             }
-            human.key_hold('w', 800); human.key_hold('a', 800);
+            human.key_hold('w', 800);
+            human.key_hold('a', 800);
         }
         self.camera_offset_y = 0.0;
     }
@@ -485,11 +600,10 @@ impl TowerDefenseApp {
         println!("🔧 执行赛前准备...");
 
         if let Ok(mut human) = self.driver.lock() {
-
             // 🔥 新增：按住 W 的同时按空格 (W + Space)
             if let Ok(mut dev) = human.device.lock() {
                 // HID 键码: W = 0x1A, Space = 0x2C
-                
+
                 // (1) 按下 W
                 dev.key_down(0x1A, 0);
             }
@@ -497,27 +611,46 @@ impl TowerDefenseApp {
 
             if let Ok(mut dev) = human.device.lock() {
                 // (2) 按下 Space (此时 W 仍保持按下状态，发送组合键 W+Space)
-                dev.key_down(0x2C, 0); 
+                dev.key_down(0x2C, 0);
             }
             thread::sleep(Duration::from_millis(100)); // 起跳判定时间
 
             if let Ok(mut dev) = human.device.lock() {
                 // (3) 松开所有按键 (W 和 Space 同时松开)
-                dev.key_up(); 
+                dev.key_up();
+            }
+            if let Ok(mut dev) = human.device.lock() {
+                // HID 键码: W = 0x1A, Space = 0x2C
+
+                // (1) 按下 W
+                dev.key_down(0x1A, 0);
+            }
+            thread::sleep(Duration::from_millis(200)); // 助跑时间
+
+            if let Ok(mut dev) = human.device.lock() {
+                // (2) 按下 Space (此时 W 仍保持按下状态，发送组合键 W+Space)
+                dev.key_down(0x2C, 0);
+            }
+            thread::sleep(Duration::from_millis(100)); // 起跳判定时间
+
+            if let Ok(mut dev) = human.device.lock() {
+                // (3) 松开所有按键 (W 和 Space 同时松开)
+                dev.key_up();
             }
             println!("   -> 执行战术动作: W + Space");
         }
 
         if let Ok(mut human) = self.driver.lock() {
-            human.key_click('n'); thread::sleep(Duration::from_millis(1000));
-            human.move_to_humanly(212, 294, 0.5); human.click_humanly(true, false, 0);
+            human.key_click('n');
+            thread::sleep(Duration::from_millis(500));
+            human.move_to_humanly(212, 294, 0.5);
+            human.click_humanly(true, false, 0);
         }
         self.select_loadout(loadout);
         if let Ok(mut human) = self.driver.lock() {
-            human.key_click('n'); thread::sleep(Duration::from_millis(500));
+            human.key_click('n');
+            thread::sleep(Duration::from_millis(500));
         }
-
-        
     }
 
     pub fn select_loadout(&self, tower_names: &[&str]) {
@@ -525,14 +658,21 @@ impl TowerDefenseApp {
             if let Some(config) = self.trap_lookup.get(*name) {
                 let [x, y] = config.select_pos;
                 if let Ok(mut d) = self.driver.lock() {
-                    d.move_to_humanly(x as u16, y as u16, 0.5); d.click_humanly(true, false, 0);
+                    d.move_to_humanly(x as u16, y as u16, 0.5);
+                    d.click_humanly(true, false, 0);
                 }
                 thread::sleep(Duration::from_millis(400));
             }
         }
     }
 
-    fn get_absolute_map_pixel(&self, gx: usize, gy: usize, w: usize, h: usize) -> Option<(f32, f32)> {
+    fn get_absolute_map_pixel(
+        &self,
+        gx: usize,
+        gy: usize,
+        w: usize,
+        h: usize,
+    ) -> Option<(f32, f32)> {
         let meta = self.map_meta.as_ref()?;
         let sx = meta.offset_x + ((gx as f32 + w as f32 / 2.0) * meta.grid_pixel_size);
         let sy = meta.offset_y + ((gy as f32 + h as f32 / 2.0) * meta.grid_pixel_size);
@@ -540,8 +680,18 @@ impl TowerDefenseApp {
     }
 
     fn get_trap_key(&self, name: &str) -> char {
-        let index = self.active_loadout.iter().position(|t| t == name).unwrap_or(0);
-        match index { 0 => '4', 1 => '5', 2 => '6', 3 => '7', _ => '1' }
+        let index = self
+            .active_loadout
+            .iter()
+            .position(|t| t == name)
+            .unwrap_or(0);
+        match index {
+            0 => '4',
+            1 => '5',
+            2 => '6',
+            3 => '7',
+            _ => '1',
+        }
     }
 
     pub fn run(&mut self, terrain_p: &str, strategy_p: &str, trap_p: &str, loadout: &[&str]) {
@@ -552,8 +702,10 @@ impl TowerDefenseApp {
 
         if let Ok(mut human) = self.driver.lock() {
             println!("👆 点击游戏入口...");
-            human.move_to_humanly(1700, 950, 0.5); human.click_humanly(true, false, 0);
-            human.move_to_humanly(1110, 670, 0.5); human.click_humanly(true, false, 0);
+            human.move_to_humanly(1700, 950, 0.5);
+            human.click_humanly(true, false, 0);
+            human.move_to_humanly(1110, 670, 0.5);
+            human.click_humanly(true, false, 0);
         }
 
         println!("⏳ 等待战斗开始...");
@@ -580,7 +732,9 @@ impl TowerDefenseApp {
                     let current_wave = status.current_wave;
                     self.execute_wave_phase(current_wave, false);
                     println!("🔔 波次 {} 前期完成，按 G 开战", current_wave);
-                    if let Ok(mut d) = self.driver.lock() { d.key_click('g'); }
+                    if let Ok(mut d) = self.driver.lock() {
+                        d.key_click('g');
+                    }
                     thread::sleep(Duration::from_secs(1));
                     self.execute_wave_phase(current_wave, true);
                 }

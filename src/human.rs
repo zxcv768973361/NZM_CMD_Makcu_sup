@@ -139,18 +139,19 @@ impl HumanDriver {
         }
     }
 
-    pub fn double_click_humanly(&mut self, left: bool, right: bool) {
-        let mut rng = rand::thread_rng();
-        
-        // 第一次点击
-        self.click_humanly(left, right, 0);
-        
-        // 两次点击之间的关键间隔：拟人化的短促停顿 (通常 40-90ms 是双击的黄金时间)
-        let interval = rng.gen_range(40..85);
-        thread::sleep(Duration::from_millis(interval));
-        
-        // 第二次点击
-        self.click_humanly(left, right, 0);
+// src/human.rs
+
+    pub fn double_click_humanly(&mut self, left: bool, right: bool, interval_ms: u64) {
+         self.click_humanly(left, right, 0);
+         
+         // 为了保持拟人化，我们在传入的基准时间上增加 0~20ms 的随机波动
+         // 如果你想要绝对精确，去掉 jitter 即可
+         let jitter = rand::thread_rng().gen_range(0..20);
+         let final_delay = interval_ms + jitter;
+
+         std::thread::sleep(Duration::from_millis(final_delay));
+         
+         self.click_humanly(left, right, 0);
     }
 
     /// 【拟人化打字】
