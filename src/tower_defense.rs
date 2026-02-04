@@ -353,6 +353,13 @@ let val = if use_tab {
             return;
         }
 
+        println!("📊 [Debug] 第 {} 波任务收集: 拆除 {}, 建造 {}, 升级 {}", 
+            wave, 
+            tasks.iter().filter(|t| matches!(t.action, TaskAction::Demolish(_))).count(),
+            tasks.iter().filter(|t| matches!(t.action, TaskAction::Place(_))).count(),
+            tasks.iter().filter(|t| matches!(t.action, TaskAction::Upgrade(_))).count()
+        );
+
         let meta = self.map_meta.as_ref().unwrap();
         let map_h = meta.bottom;
         let screen_h = self.config.screen_height;
@@ -361,6 +368,9 @@ let val = if use_tab {
         let (mut upper_tasks, mut lower_tasks): (Vec<_>, Vec<_>) = tasks
             .into_iter()
             .partition(|t| t.map_y <= mid_point + screen_h / 2.0);
+
+
+        println!("📊 [Debug] 分区情况: 上半区 {} 个, 下半区 {} 个", upper_tasks.len(), lower_tasks.len());
 
         if !upper_tasks.is_empty() {
             println!("⬆️ 执行上半区任务: {} 个", upper_tasks.len());
@@ -519,7 +529,7 @@ let val = if use_tab {
         let delta = ideal_cam_y - self.camera_offset_y;
 
         // 小于 50 像素不移动
-        if delta.abs() < 50.0 {
+        if delta.abs() < 10.0 {
             return false;
         }
 
@@ -577,21 +587,21 @@ let val = if use_tab {
         if let Ok(mut human) = self.driver.lock() {
             human.key_click('o');
             thread::sleep(Duration::from_secs(2));
-            for _ in 1..=7 {
-                for _ in 0..12 {
+            for _ in 1..=4 {
+                for _ in 0..10 {
                     human.mouse_scroll(-120);
                     thread::sleep(Duration::from_millis(30));
                 }
-                thread::sleep(Duration::from_millis(300));
+                thread::sleep(Duration::from_millis(100));
             }
-            for _ in 1..=4 {
-                human.key_hold('w', 500);
+            for _ in 1..=2 {
+                human.key_hold('w', 200);
                 thread::sleep(Duration::from_millis(50));
-                human.key_hold('a', 500);
+                human.key_hold('a', 200);
                 thread::sleep(Duration::from_millis(50));
             }
-            human.key_hold('w', 800);
-            human.key_hold('a', 800);
+            human.key_hold('w', 200);
+            human.key_hold('a', 200);
         }
         self.camera_offset_y = 0.0;
     }
@@ -607,7 +617,7 @@ let val = if use_tab {
                 // (1) 按下 W
                 dev.key_down(0x1A, 0);
             }
-            thread::sleep(Duration::from_millis(200)); // 助跑时间
+            thread::sleep(Duration::from_millis(1000)); // 助跑时间
 
             if let Ok(mut dev) = human.device.lock() {
                 // (2) 按下 Space (此时 W 仍保持按下状态，发送组合键 W+Space)
