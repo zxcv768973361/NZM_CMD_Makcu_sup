@@ -308,125 +308,104 @@ impl TowerDefenseApp {
         }
         true
     }
-
-    pub fn execute_wave_phase(&mut self, wave: i32, is_late: bool) {
+pub fn execute_wave_phase(&mut self, wave: i32, is_late: bool) {
         let phase_name = if is_late { "后期" } else { "前期" };
-        println!("🚀 优化执行第 {} 波 [{}]...", wave, phase_name);
+        println!("🚀 优化执行第 {} 波 [{}] (拆除优先模式)...", wave, phase_name);
 
-        let mut tasks: Vec<ScheduledTask> = Vec::new();
+        // 1. 分类收集任务
+        let mut demolish_tasks = Vec::new();
+        let mut build_upgrade_tasks = Vec::new();
 
+        // 收集拆除任务 (Priority 0)
         for d in self.strategy_demolishes.iter().filter(|d| {
-            d.wave_num == wave
-                && d.is_late == is_late
-                && !self.completed_demolish_uids.contains(&d.uid)
+            d.wave_num == wave && d.is_late == is_late && !self.completed_demolish_uids.contains(&d.uid)
         }) {
-            if let Some((px, py)) =
-                self.get_absolute_map_pixel(d.grid_x, d.grid_y, d.width, d.height)
-            {
-                tasks.push(ScheduledTask {
+            if let Some((px, py)) = self.get_absolute_map_pixel(d.grid_x, d.grid_y, d.width, d.height) {
+                demolish_tasks.push(ScheduledTask {
                     action: TaskAction::Demolish(d.clone()),
-                    map_y: py,
-                    map_x: px,
-                    priority: 0,
+                    map_y: py, map_x: px, priority: 0,
                 });
             }
         }
+
+        // 收集建造任务 (Priority 1)
         for b in self.strategy_buildings.iter().filter(|b| {
             b.wave_num == wave && b.is_late == is_late && !self.placed_uids.contains(&b.uid)
         }) {
-            if let Some((px, py)) =
-                self.get_absolute_map_pixel(b.grid_x, b.grid_y, b.width, b.height)
-            {
-                tasks.push(ScheduledTask {
+            if let Some((px, py)) = self.get_absolute_map_pixel(b.grid_x, b.grid_y, b.width, b.height) {
+                build_upgrade_tasks.push(ScheduledTask {
                     action: TaskAction::Place(b.clone()),
-                    map_y: py,
-                    map_x: px,
-                    priority: 1,
-                });
-            }
-        }
-        for u in self
-            .strategy_upgrades
-            .iter()
-            .filter(|u| u.wave_num == wave && u.is_late == is_late)
-        {
-            let key = format!("{}-{}-{}", u.building_name, u.wave_num, u.is_late);
-            if !self.completed_upgrade_keys.contains(&key) {
-                tasks.push(ScheduledTask {
-                    action: TaskAction::Upgrade(u.clone()),
-                    map_y: 0.0,
-                    map_x: 0.0,
-                    priority: 2,
+                    map_y: py, map_x: px, priority: 1,
                 });
             }
         }
 
-        if tasks.is_empty() {
+        // 收集升级任务 (Priority 2)
+        for u in self.strategy_upgrades.iter().filter(|u| u.wave_num == wave && u.is_late == is_late) {
+            let key = format!("{}-{}-{}", u.building_name, u.wave_num, u.is_late);
+            if !self.completed_upgrade_keys.contains(&key) {
+                build_upgrade_tasks.push(ScheduledTask {
+                    action: TaskAction::Upgrade(u.clone()),
+                    map_y: 0.0, map_x: 0.0, priority: 2,
+                });
+            }
+        }
+
+        if demolish_tasks.is_empty() && build_upgrade_tasks.is_empty() {
             return;
         }
 
-        println!("📊 [Debug] 第 {} 波任务收集: 拆除 {}, 建造 {}, 升级 {}", 
-            wave, 
-            tasks.iter().filter(|t| matches!(t.action, TaskAction::Demolish(_))).count(),
-            tasks.iter().filter(|t| matches!(t.action, TaskAction::Place(_))).count(),
-            tasks.iter().filter(|t| matches!(t.action, TaskAction::Upgrade(_))).count()
-        );
+        // --- 第一阶段：优先执行所有拆除任务 ---
+        if !demolish_tasks.is_empty() {
+            println!("🧹 [Step 1] 正在执行全图拆除任务 ({}个)...", demolish_tasks.len());
+            self.dispatch_tasks_by_region(demolish_tasks);
+        }
 
+        // --- 第二阶段：执行建造和升级任务 ---
+        if !build_upgrade_tasks.is_empty() {
+            println!("🏗️ [Step 2] 正在执行建造与升级任务 ({}个)...", build_upgrade_tasks.len());
+            // 确保建造内部依然遵循 Priority (先建后升)
+            build_upgrade_tasks.sort_by(|a, b| a.priority.cmp(&b.priority));
+            self.dispatch_tasks_by_region(build_upgrade_tasks);
+        }
+    }
+
+    /// 辅助函数：将一组任务按区域执行（包含智能归零逻辑）
+    fn dispatch_tasks_by_region(&mut self, tasks: Vec<ScheduledTask>) {
         let meta = self.map_meta.as_ref().unwrap();
         let map_h = meta.bottom;
         let screen_h = self.config.screen_height;
         let mid_point = (map_h - screen_h) / 2.0;
 
-        let (mut upper_tasks, mut lower_tasks): (Vec<_>, Vec<_>) = tasks
+        // 分区：上半区 vs 下半区
+        let (mut upper, mut lower): (Vec<_>, Vec<_>) = tasks
             .into_iter()
             .partition(|t| t.map_y <= mid_point + screen_h / 2.0);
 
-
-        println!("📊 [Debug] 分区情况: 上半区 {} 个, 下半区 {} 个", upper_tasks.len(), lower_tasks.len());
-
-        // --- 上半区处理逻辑 ---
-        if !upper_tasks.is_empty() {
-            println!("⬆️ 准备执行上半区任务...");
-            upper_tasks.sort_by(|a, b| {
-                a.map_y
-                    .partial_cmp(&b.map_y)
-                    .unwrap()
-                    .then(a.priority.cmp(&b.priority))
-            });
-
-            // 🔥 智能归零判断
-            if self.are_tasks_in_current_view(&upper_tasks) {
-                println!("✨ [Smart] 上半区任务均在当前视野内，跳过归零！");
-                self.process_task_batch(upper_tasks, false);
+        // 处理上半区
+        if !upper.is_empty() {
+            upper.sort_by(|a, b| a.map_y.partial_cmp(&b.map_y).unwrap().then(a.priority.cmp(&b.priority)));
+            if self.are_tasks_in_current_view(&upper) {
+                println!("✨ 上半区任务在视野内，直接执行");
+                self.process_task_batch(upper, false);
             } else {
-                println!("🔄 [Reset] 任务超出视野，执行顶部归零...");
                 self.align_camera_to_edge(true);
-                self.process_task_batch(upper_tasks, true);
+                self.process_task_batch(upper, true);
             }
         }
 
-        // --- 下半区处理逻辑 ---
-        if !lower_tasks.is_empty() {
-            println!("⬇️ 准备执行下半区任务...");
-            lower_tasks.sort_by(|a, b| {
-                b.map_y
-                    .partial_cmp(&a.map_y)
-                    .unwrap()
-                    .then(a.priority.cmp(&b.priority))
-            });
-
-            // 🔥 智能归零判断
-            if self.are_tasks_in_current_view(&lower_tasks) {
-                println!("✨ [Smart] 下半区任务均在当前视野内，跳过归零！");
-                self.process_task_batch(lower_tasks, false);
+        // 处理下半区
+        if !lower.is_empty() {
+            lower.sort_by(|a, b| b.map_y.partial_cmp(&a.map_y).unwrap().then(a.priority.cmp(&b.priority)));
+            if self.are_tasks_in_current_view(&lower) {
+                println!("✨ 下半区任务在视野内，直接执行");
+                self.process_task_batch(lower, false);
             } else {
-                println!("🔄 [Reset] 任务超出视野，执行底部归零...");
                 self.align_camera_to_edge(false);
-                self.process_task_batch(lower_tasks, true);
+                self.process_task_batch(lower, true);
             }
         }
     }
-
     fn process_task_batch(&mut self, tasks: Vec<ScheduledTask>, force_initial_refresh: bool) {
         let mut last_build_key: Option<char> = None;
         let mut is_first_task = true;
