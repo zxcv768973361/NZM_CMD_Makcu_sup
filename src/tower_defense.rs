@@ -11,6 +11,27 @@ use std::time::{Duration, Instant};
 // ==========================================
 // 1. 数据结构协议
 // ==========================================
+
+// ==========================================
+// 新增：预备阶段动作定义
+// ==========================================
+#[derive(Deserialize, Debug, Clone)]
+#[serde(tag = "type")]
+pub enum PrepAction {
+    KeyDown { key: char },
+    KeyUpAll,
+    Wait { ms: u64 },
+    Log { msg: String },
+}
+
+// 辅助函数：将字符转换为 HID 键码 (为了不依赖 human.rs 的私有方法，这里简单实现一个)
+fn get_hid_code(c: char) -> u8 {
+    match c.to_ascii_lowercase() {
+        'a'..='z' => c.to_ascii_lowercase() as u8 - b'a' + 0x04,
+        ' ' => 0x2C,
+        _ => 0,
+    }
+}
 #[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "type")] // JSON 中使用 "type": "Click" 来区分
 pub enum InitAction {
@@ -62,7 +83,9 @@ impl Default for TDConfig {
 pub struct TrapConfigItem {
     pub name: String,
     #[serde(default)]
-    pub select_pos: [i32; 2],
+    pub b_type: String,
+    #[serde(default)]
+    pub grid_index: [i32; 2],
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -71,6 +94,8 @@ pub struct MapMeta {
     pub offset_x: f32,
     pub offset_y: f32,
     pub bottom: f32,
+    #[serde(default)]
+    pub prep_actions: Vec<PrepAction>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -628,67 +653,100 @@ pub fn execute_wave_phase(&mut self, wave: i32, is_late: bool) {
         self.camera_offset_y = 0.0;
     }
 
-    pub fn execute_prep_logic(&self, loadout: &[&str]) {
+pub fn execute_prep_logic(&self, loadout: &[&str]) {
         println!("🔧 执行赛前准备...");
 
-        if let Ok(mut human) = self.driver.lock() {
-            // W + Space 组合键
-            if let Ok(mut dev) = human.device.lock() {
-                // (1) 按下 W
-                dev.key_down(0x1A, 0);
+        // 1. 执行配置的战术动作 (移动/跳跃等)
+        if let Some(meta) = &self.map_meta {
+            if !meta.prep_actions.is_empty() {
+                println!("   -> 加载自定义战术动作 ({} 步)", meta.prep_actions.len());
+                
+                if let Ok(mut human) = self.driver.lock() {
+                    if let Ok(mut dev) = human.device.lock() {
+                        for action in &meta.prep_actions {
+                            match action {
+                                PrepAction::KeyDown { key } => {
+                                    let code = get_hid_code(*key);
+                                    if code != 0 {
+                                        dev.key_down(code, 0);
+                                    }
+                                }
+                                PrepAction::KeyUpAll => {
+                                    dev.key_up();
+                                }
+                                PrepAction::Wait { ms } => {
+                                    // 释放锁进行睡眠，避免长时间占用设备锁 (可选，但推荐)
+                                    drop(dev); 
+                                    thread::sleep(Duration::from_millis(*ms));
+                                    // 重新获取锁
+                                    dev = human.device.lock().unwrap(); 
+                                }
+                                PrepAction::Log { msg } => {
+                                    println!("   [Prep] {}", msg);
+                                }
+                            }
+                        }
+                        // 保险起见，循环结束后强制松开所有键
+                        dev.key_up();
+                    }
+                }
+            } else {
+                println!("   -> 无战术动作配置，跳过。");
             }
-            thread::sleep(Duration::from_millis(1000)); // 助跑时间
-
-            if let Ok(mut dev) = human.device.lock() {
-                // (2) 按下 Space
-                dev.key_down(0x2C, 0);
-            }
-            thread::sleep(Duration::from_millis(100)); // 起跳判定时间
-
-            if let Ok(mut dev) = human.device.lock() {
-                // (3) 松开所有
-                dev.key_up();
-            }
-            
-            // 为了稳妥，再做一遍
-             if let Ok(mut dev) = human.device.lock() {
-                dev.key_down(0x1A, 0);
-            }
-            thread::sleep(Duration::from_millis(200)); 
-
-            if let Ok(mut dev) = human.device.lock() {
-                dev.key_down(0x2C, 0);
-            }
-            thread::sleep(Duration::from_millis(100)); 
-
-            if let Ok(mut dev) = human.device.lock() {
-                dev.key_up();
-            }
-            println!("   -> 执行战术动作: W + Space");
         }
 
+        // 2. 打开装备菜单选塔 (保留之前的逻辑)
         if let Ok(mut human) = self.driver.lock() {
             human.key_click('n');
             thread::sleep(Duration::from_millis(500));
-            human.move_to_humanly(212, 294, 0.5);
-            human.click_humanly(true, false, 0);
         }
+
         self.select_loadout(loadout);
+
         if let Ok(mut human) = self.driver.lock() {
             human.key_click('n');
             thread::sleep(Duration::from_millis(500));
         }
     }
+pub fn select_loadout(&self, tower_names: &[&str]) {
+        // UI 布局常量
+        const GRID_START_X: i32 = 520;
+        const GRID_START_Y: i32 = 330;
+        const GRID_STEP_X: i32 = 170;
+        const GRID_STEP_Y: i32 = 205;
 
-    pub fn select_loadout(&self, tower_names: &[&str]) {
         for name in tower_names.iter().take(4) {
             if let Some(config) = self.trap_lookup.get(*name) {
-                let [x, y] = config.select_pos;
+                // 1. 根据 b_type 切换左侧标签
+                // 假设标签页 X=212, Y 分别为 294(地), 380(墙), 465(顶)
+                let (tab_x, tab_y) = match config.b_type.as_str() {
+                    "Wall" => (172, 375),    // ⚠️ TODO: 请确认墙面标签的 Y 坐标
+                    "Ceiling" => (172, 462), // ⚠️ TODO: 请确认天花板标签的 Y 坐标
+                    _ => (172, 294),         // 默认为地面 Floor
+                };
+
                 if let Ok(mut d) = self.driver.lock() {
-                    d.move_to_humanly(x as u16, y as u16, 0.5);
+                    // 点击分类标签
+                    d.move_to_humanly(tab_x, tab_y, 0.4);
+                    d.click_humanly(true, false, 0);
+                    // 等待 UI 刷新，避免点太快
+                    thread::sleep(Duration::from_millis(300));
+
+                    // 2. ✨ 计算网格坐标
+                    let col = config.grid_index[0];
+                    let row = config.grid_index[1];
+                    
+                    let target_x = GRID_START_X + col * GRID_STEP_X;
+                    let target_y = GRID_START_Y + row * GRID_STEP_Y;
+
+                    // 点击具体陷阱
+                    d.move_to_humanly(target_x as u16, target_y as u16, 0.4);
                     d.click_humanly(true, false, 0);
                 }
+                
                 thread::sleep(Duration::from_millis(400));
+            } else {
+                println!("⚠️ [Config Error] 未找到陷阱配置: {}", name);
             }
         }
     }
