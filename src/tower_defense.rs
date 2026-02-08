@@ -214,7 +214,7 @@ impl TowerDefenseApp {
             trap_lookup: HashMap::new(),
             active_loadout: Vec::new(),
             camera_offset_y: 0.0,
-            move_speed: 720.0,
+            move_speed: 300.0,
         }
     }
 
