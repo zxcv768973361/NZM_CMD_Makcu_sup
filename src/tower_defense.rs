@@ -485,19 +485,39 @@ impl TowerDefenseApp {
         }
     }
 
+// src/tower_defense.rs
+
     fn perform_demolish_action(&mut self, map_x: f32, map_y: f32, uid: usize) {
         let [sz_x1, sz_y1, sz_x2, sz_y2] = self.config.safe_zone;
         let screen_x = (map_x - 0.0).clamp(sz_x1 as f32, sz_x2 as f32);
         let screen_y = (map_y - self.camera_offset_y).clamp(sz_y1 as f32, sz_y2 as f32);
 
         if let Ok(mut driver) = self.driver.lock() {
+            // 1. 移动到位后强制停顿，确保准星彻底对齐格子
             driver.move_to_humanly(screen_x as u16, screen_y as u16, 0.4);
-            driver.click_humanly(true, false, 0);
+            thread::sleep(Duration::from_millis(50));
+
+            // 2. 点击选中 (增加 hold 时间到 60ms，防止点击过快游戏未响应)
+            driver.click_humanly(true, false, 60); 
+            
+            // 3. 等待选中框出现的延迟 (从 150ms 增加到 250ms)
             thread::sleep(Duration::from_millis(150));
+
+            // 4. 🔥 双击 'E' 拆除 (Double Tap)
+            // 第一下 E：执行拆除
+            driver.key_click('e');
+            
+            // 间隔 100ms
+            thread::sleep(Duration::from_millis(100));
+            
+            // 第二下 E：保险措施 (防止第一下被吞，或者部分陷阱需要二次确认)
             driver.key_click('e');
         }
+        
         self.completed_demolish_uids.insert(uid);
-        thread::sleep(Duration::from_millis(300));
+        
+        // 动作后摇 (稍微缩短一点，因为我们已经多按了一次E)
+        thread::sleep(Duration::from_millis(200));
     }
 
     fn perform_build_action(
@@ -611,7 +631,7 @@ impl TowerDefenseApp {
         let ideal_cam_y = (target_map_y - safe_center_screen_y).clamp(0.0, max_scroll_y);
         let delta = ideal_cam_y - self.camera_offset_y;
 
-        if delta.abs() < 30.0 {
+        if delta.abs() < 90.0 {
             return false;
         }
 
