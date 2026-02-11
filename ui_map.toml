@@ -205,6 +205,11 @@ name = "空间站普通"
 handler = "td"
 
 [[scenes]]
+id = "空间站困难"
+name = "空间站困难"
+handler = "td"
+
+[[scenes]]
 id = "空间站英雄"
 name = "空间站英雄"
 handler = "td"
