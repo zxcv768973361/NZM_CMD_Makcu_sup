@@ -137,6 +137,15 @@ fn main() {
                     if let Ok(mut dev) = human.device.lock() {
                         dev.key_up();
                     }
+
+                    thread::sleep(Duration::from_millis(100));
+                    if let Ok(mut dev) = human.device.lock() {
+                        dev.key_down(0x2C, 0); // 空格键扫描码
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                    if let Ok(mut dev) = human.device.lock() {
+                        dev.key_up(); 
+                    }
                 }
 
                 println!("⏳ 等待界面重置 (3秒)...");
