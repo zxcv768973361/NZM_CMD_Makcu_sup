@@ -1,11 +1,43 @@
 # NZM_CMD - 逆战：未来指挥官
 
-**NZM_CMD** 是《逆战：未来》的自动化辅助框架。
+**NZM_CMD** 是《逆战：未来》的自动化执行终端与辅助框架。
 
-本项目采用了 **双模驱动架构 (Dual-Mode Driver Architecture)** 与 **计算机视觉 (Computer Vision)** 相结合的方案。
+本项目采用了 **双模驱动架构 (Dual-Mode Driver Architecture)** 与 **计算机视觉 (Computer Vision)** 相结合的方案，旨在提供最安全、最稳定的自动化体验。
 
-# 不会释放可执行文件,直到软件稳定
-当前游戏配置要求,无边框全屏1920*1080 帧数全部设置为60(除了分辨率可能不影响,其他必须全部满足)
+> ⚠️ **注意**：本项目目前**不提供预编译的可执行文件 (EXE)**，直至软件进入稳定阶段。请参照下文自行编译。
+
+---
+
+## 🛠️ 生态系统与配合 (Ecosystem)
+
+本项目是 **MINKE 体系** 的一部分，建议配合以下项目使用以获得完整体验：
+
+### 🧩 [MINKE's Indexed NiZhan Keypoint Environment](https://github.com/Minkelxy/MINKE-s-Indexed-NiZhan-Keypoint-Environment)
+**（策略生产工场）**
+
+`NZM_CMD` 专注于**执行**，而 `MINKE` 专注于**生产**。
+* **可视化编辑**：使用 `MINKE` 提供的可视化地图编辑器，您可以直观地在游戏截图上标记网格、绘制地形、规划陷阱布局。
+* **数据生成**：`MINKE` 负责生成 `NZM_CMD` 所需的核心配置文件：
+    * `*地图.json`：包含地图的物理参数、网格数据和预备动作。
+    * `*策略.json`：定义每一波的建造、升级和拆除指令。
+* **工作流**：
+    1. 在 **MINKE** 中加载游戏截图，绘制地图与策略。
+    2. 导出 JSON 文件。
+    3. 将 JSON 文件放入 **NZM_CMD** 的运行目录。
+    4. 启动 **NZM_CMD** 执行全自动挂机。
+
+---
+
+## ⚙️ 游戏配置要求 (Prerequisites)
+
+为了确保 CV 识别准确，请务必将游戏设置为以下配置：
+
+* **显示模式**: 无边框全屏 (Borderless Windowed)
+* **分辨率**: **1920x1080**
+* **帧率限制**: **60 FPS** (包括大厅和局内，必须锁定以保证时序稳定)
+* **画质设置**: 推荐低/中画质，关闭动态模糊和光影特效（减少 OCR 干扰）
+
+---
 
 ## 📅 开发路线图 (Roadmap)
 
@@ -48,7 +80,7 @@ NZM_CMD/
 │   ├── tower_defense.rs  # [业务] 塔防战斗逻辑、陷阱策略调度
 │   └── models.rs         # 数据结构定义
 ├── tool/                 # 配套工具：UI 坐标抓取与 OCR 调试器
-├── *.json                # 塔防地图与策略配置文件
+├── *.json                # 塔防地图与策略配置文件 (由 MINKE 生成)
 ├── ui_map.toml           # 界面导航与路由配置文件
 └── start_task.bat        # 自动提权启动脚本
 
@@ -61,8 +93,7 @@ NZM_CMD/
 ### 环境要求
 
 * **OS**: Windows 10 / 11 (需启用 Windows OCR 服务)
-* **分辨率**: 1920x1080 (100% 缩放)
-* **Rust**: Stable toolchain
+* **Rust**: Stable toolchain (请自行安装 Rust 环境进行编译)
 
 ### 1. 编译项目
 
@@ -87,7 +118,7 @@ cargo build --release
 **通用语法：**
 
 ```bash
-cargo run -- -p <端口> -t <目标任务>
+cargo run --release -- -p <端口> -t <目标任务>
 
 ```
 
@@ -95,7 +126,7 @@ cargo run -- -p <端口> -t <目标任务>
 
 ```bash
 # 自动回退到软件模式，执行赛季任务
-cargo run -- -p SOFT -t "赛季任务"
+cargo run --release -- -p SOFT -t "赛季任务"
 
 ```
 
@@ -103,7 +134,7 @@ cargo run -- -p SOFT -t "赛季任务"
 
 ```bash
 # 连接 COM3 端口，前往空间站地图
-cargo run -- -p COM3 -t "空间站普通"
+cargo run --release -- -p COM3 -t "空间站普通"
 
 ```
 
@@ -137,7 +168,7 @@ handler = "td"     # 指定由 TowerDefenseApp 接管
 
 ### 2. 塔防策略 (`*策略.json`)
 
-定义塔防模式下的建造顺序和位置。
+定义塔防模式下的建造顺序和位置。**强烈建议使用 [MINKE 环境](https://www.google.com/url?sa=E&source=gmail&q=https://github.com/Minkelxy/MINKE-s-Indexed-NiZhan-Keypoint-Environment) 生成此文件。**
 
 ---
 
@@ -164,3 +195,4 @@ cargo run --release
 ## 📜 License
 
 MIT License
+
